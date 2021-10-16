@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+
+<html> 
+    <style>
+    
+        body{background-color: #0A0B0A;}
+        
+        canvas 
+        {
+            padding-left: 0;
+            padding-right: 0;
+            margin-left: auto;
+            margin-right: auto;
+            display: block;
+        }
+    </style>
+
+<script id="flat-vs" type="x-shader/x-vertex">
+    attribute vec2 a_position;
+    attribute vec2 a_texCoord;
+    varying   vec2 v_texCoord;
+    void main()
+    {
+        gl_Position = vec4(a_position, 0, 1);
+        v_texCoord = a_texCoord;
+    }
+</script>
+
+<script id="flat-fs" type="x-shader/x-fragment">
+    precision mediump float;
+    uniform sampler2D u_tex;
+    uniform vec2      u_texDim;
+    uniform int       u_dir;
+    uniform float     u_kernel[101];
+    varying vec2      v_texCoord;
+
+    void blur_v()
+    {
+        float p = 1.0 / u_texDim.y;
+        vec4 sum = vec4(0,0,0,0);
+        float ext = 50.0;
+        for (int i = 0; i < 101; i++)
+        {
+            sum += u_kernel[i] * texture2D(u_tex, vec2(0, (float(i) - ext) * p) + v_texCoord);
+        }
+        gl_FragColor = sum;
+    }
+
+    void blur_h()
+    {
+        float p = 1.0 / u_texDim.x;
+        vec4 sum = vec4(0,0,0,0);
+        float ext = 50.0;
+        for (int i = 0; i < 101; i++)
+        {
+            sum += u_kernel[i] * texture2D(u_tex, vec2((float(i) - ext) * p, 0) + v_texCoord);
+        }
+        gl_FragColor = sum;
+    }
+
+    void main()
+    {
+        if (v_texCoord.x > 0.381966)
+        {
+            gl_FragColor = texture2D(u_tex, v_texCoord);
+        }
+        else
+        {
+            if (u_dir == 1)
+            {
+                blur_v();
+            }
+            else
+            {
+                blur_h();
+            }
+        }
+    }
+</script>
+
+<script id="tex-vs" type="x-shader/x-vertex">
+    attribute vec3 vertex;
+    attribute vec2 inUV;
+    varying mediump vec2 UV;
+    uniform mat4 viewMatrix;
+    uniform mat4 projectionMatrix;
+    void main()
+    {
+        gl_Position =  projectionMatrix * viewMatrix * vec4(vertex,1);
+        UV = inUV;
+    }
+</script>
+
+<script id="tex-fs" type="x-shader/x-fragment">
+    varying mediump vec2 UV;
+    uniform sampler2D u_tex;
+    void main()
+    {
+        gl_FragColor = texture2D(u_tex, UV);
+    }
+</script>
+
+<script src="globals.js"></script>
+<script src="textureloader.js"></script>
+<script src="glutils.js"></script>
+<script src="mat4.js"></script>
+<script src="Gauss.js"></script>
+ 
+<script>
+ 
+    function init_gl(canvas) {
+        try {
+            gl = canvas.getContext("webgl");
+            if (!gl)
+                gl = canvas.getContext("experimental-webgl");
+            if (gl) {
+                
+                ensure_fullscreen();
+                gl.enable(gl.DEPTH_TEST);
+                gl.depthFunc(gl.LEQUAL); 
+            }
+        } catch (e) {
+        }
+
+        if (!gl) {
+            alert("Could not initialise WebGL, sorry :-(");
+        }
+    }
+
+    function getRelMousePos(mousePos, screenWidth, screenHeight)
+    {
+        return [mousePos[0] / screenWidth - .5, mousePos[1] / screenHeight - .5];
+    }
+
+    function drawCube(fb)
+    {
+        gl.useProgram(tex_program)
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+
+        gl.bindTexture(gl.TEXTURE_2D, cubeTexture);
+
+        gl.viewport(0, 0, canvas.width, canvas.height);
+
+        const aspect = canvas.width / canvas.height;
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, cubeVB);
+        gl.vertexAttribPointer(tex_program.vertex, 3, gl.FLOAT, false, 3 * Float32Array.BYTES_PER_ELEMENT, 0);
+        gl.enableVertexAttribArray(tex_program.vertex);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, cubeUVB);
+        gl.vertexAttribPointer(tex_program.inUV, 2, gl.FLOAT, false, 2 * Float32Array.BYTES_PER_ELEMENT, 0);
+        gl.enableVertexAttribArray(tex_program.inUV);
+
+        let rmp = getRelMousePos([mx, my], canvas.width, canvas.height);
+        viewMatrix.lookAt([0,0,1], [rmp[1], rmp[0], 0], [0, 1, 0]);
+        tempMatrix.setRotationZ(-Math.PI/2);
+        viewMatrix.mult(tempMatrix);
+
+        gl.uniformMatrix4fv(tex_program.projectionMatrix, false, perspMatrix);
+        gl.uniformMatrix4fv(tex_program.viewMatrix, false, viewMatrix);
+
+        gl.drawArrays(gl.TRIANGLES, 0, 12*3);
+
+        gl.disableVertexAttribArray(tex_program.vertex);
+        gl.disableVertexAttribArray(tex_program.inUV);
+
+        //base render complete.
+
+        gl.useProgram(flat_program);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, tempFb2);
+
+        gl.bindTexture(gl.TEXTURE_2D, targetTexture);
+
+        gl.viewport(0, 0, canvas.width, canvas.height);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, srVB);
+        gl.vertexAttribPointer(flat_program.a_position, 2, gl.FLOAT, false, 2 * Float32Array.BYTES_PER_ELEMENT, 0);
+        gl.enableVertexAttribArray(flat_program.a_position);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, srUVB);
+        gl.vertexAttribPointer(flat_program.a_texCoord, 2, gl.FLOAT, false, 2 * Float32Array.BYTES_PER_ELEMENT, 0);
+        gl.enableVertexAttribArray(flat_program.a_texCoord);
+
+        gl.uniform2f(flat_program.u_texDim, canvas.width, canvas.height);
+
+        gl.uniform1i(flat_program.u_dir, 0);
+
+        gl.uniform1fv(flat_program.u_kernel, make_gv(0.6, -2, 2, 101));
+
+        gl.drawArrays(gl.TRIANGLES, 0, 2*3);
+
+        //horizontal blur complete, output stored in targetTexture2. Now for vertical blur:
+
+        gl.uniform1i(flat_program.u_dir, 1);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+        gl.bindTexture(gl.TEXTURE_2D, targetTexture2);
+
+        gl.drawArrays(gl.TRIANGLES, 0, 2*3);
+
+        //done.
+
+        gl.disableVertexAttribArray(flat_program.a_position);
+        gl.disableVertexAttribArray(flat_program.a_texCoord);
+    }
+ 
+    function draw_scene() {
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        drawCube(tempFb);
+    }
+
+    function ensure_fullscreen()
+    {
+        if ((canvas.width != window.innerWidth) || (canvas.height != window.innerHeight))
+        {
+            canvas.width  = window.innerWidth;
+            canvas.height = window.innerHeight;
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            perspMatrix.perspective(1.745329, canvas.width/canvas.height, 0.1, 500.0);
+            return true;
+        }
+    }
+
+    function updateTexAspect(tex)
+    {
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        
+        const level = 0;
+        gl.texImage2D(gl.TEXTURE_2D, level, gl.RGBA,
+                      canvas.width, canvas.height, 0,
+                      gl.RGBA, gl.UNSIGNED_BYTE, null);
+
+    }
+
+    function setDefaultTexSettings(tex)
+    {
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+
+    function mainLoop()
+    {
+        draw_scene();
+        if (ensure_fullscreen())
+        {
+            updateTexAspect(targetTexture);
+            updateTexAspect(targetTexture2);
+        }
+        frameID = requestAnimationFrame(mainLoop);
+    }
+
+    function init_stuff()
+    {
+        
+        tex_program = glutils.makeProgram("tex-vs", "tex-fs");
+        flat_program = glutils.makeProgram("flat-vs", "flat-fs");
+
+        gl.useProgram(tex_program);
+
+        cubeVB  = gl.createBuffer();
+        cubeUVB = gl.createBuffer();
+        srVB    = gl.createBuffer();
+        srUVB   = gl.createBuffer();
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, cubeVB);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cubeVertices), gl.STATIC_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, cubeUVB);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cubeUVs), gl.STATIC_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, srVB);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, 1,1,
+                                                         1,1, -1,1, -1,-1]), gl.STATIC_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, srUVB);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0,0, 1,0, 1,1,
+                                                         1,1, 0,1, 0,0]), gl.STATIC_DRAW);
+
+        cubeTexture = loadTexture("https://raw.githubusercontent.com/recidivism5/surnd/master/rndSquare.png");
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, cubeTexture);
+
+
+        targetTexture = gl.createTexture();
+
+        const level = 0;
+        updateTexAspect(targetTexture);
+        
+        setDefaultTexSettings(targetTexture);
+
+        
+        tempFb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, tempFb);
+        
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, targetTexture, level);
+
+        
+        targetTexture2 = gl.createTexture();
+        
+        updateTexAspect(targetTexture2);
+
+        setDefaultTexSettings(targetTexture2);
+
+        tempFb2 = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, tempFb2);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, targetTexture2, level);
+
+    }
+
+    function init_matrices()
+    {
+        perspMatrix = new Mat4();
+        viewMatrix  = new Mat4();
+        tempMatrix  = new Mat4();
+    }
+ 
+    function webGLStart() {
+        canvas = document.getElementById("CUBE");
+
+        init_matrices();
+        
+        init_gl(canvas);
+
+        init_stuff();
+ 
+        gl.clearColor(0.039, 0.043, 0.039, 1.0);
+
+        canvas.addEventListener("mousemove", e => {
+            mx = e.offsetX;
+            my = e.offsetY;
+        });
+
+        mainLoop();
+    }
+ 
+</script> 
+ 
+<body onload="webGLStart();"> 
+    <canvas id="CUBE" style="border: none;"></canvas> 
+</body> 
+ 
+</html>

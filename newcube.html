@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+
+<html> 
+    <style>
+    
+        body{background-color: #0A0B0A;}
+        
+        canvas 
+        {
+            padding-left: 0;
+            padding-right: 0;
+            margin-left: auto;
+            margin-right: auto;
+            display: block;
+        }
+    </style>
+
+<script id="tex-vs" type="x-shader/x-vertex">
+    attribute vec3 vertex;
+    attribute vec2 inUV;
+    varying highp vec2 UV;
+    uniform mat4 viewMatrix;
+    uniform mat4 projectionMatrix;
+    void main()
+    {
+        gl_Position =  projectionMatrix * viewMatrix * vec4(vertex,1);
+        UV = inUV;
+    }
+</script>
+
+<script id="tex-fs" type="x-shader/x-fragment">
+    varying highp vec2 UV;
+    uniform sampler2D myTextureSampler;
+    void main()
+    {
+        gl_FragColor = texture2D(myTextureSampler, UV);
+    }
+</script>
+ 
+<script>
+
+    var gl = null;
+
+    var cubeVertices = [-1,-1,1,1,-1,1,1,1,1,
+                        -1,-1,1,1,1,1,-1,1,1,
+                        1,-1,1,1,-1,-1,1,1,-1,
+                        1,-1,1,1,1,-1,1,1,1,
+                        1,-1,-1,-1,-1,-1,-1,1,-1,
+                        1,-1,-1,-1,1,-1,1,1,-1,
+                        -1,-1,-1,-1,-1,1,-1,1,1,
+                        -1,-1,-1,-1,1,1,-1,1,-1,
+                        -1,1,1,1,1,1,1,1,-1,
+                        -1,1,1,1,1,-1,-1,1,-1,
+                        1,-1,1,-1,-1,-1,1,-1,-1,
+                        1,-1,1,-1,-1,1,-1,-1,-1]
+
+    var cubeUVs =  [0, 1, 0, 0, 1, 0, 0, 1,
+                    1, 0, 1, 1, 0, 1, 0, 0,
+                    1, 0, 0, 1, 1, 0, 1, 1,
+                    0, 1, 0, 0, 1, 0, 0, 1,
+                    1, 0, 1, 1, 0, 1, 0, 0,
+                    1, 0, 0, 1, 1, 0, 1, 1,
+                    0, 1, 0, 0, 1, 0, 0, 1,
+                    1, 0, 1, 1, 0, 1, 1, 0,
+                    0, 0, 0, 1, 1, 1, 1, 0];
+
+    let cubeXTheta = 0.0;
+    let cubeYTheta = 0.0;
+
+    var cubeVB;
+    var cubeUVB;
+    var cubeTexture;
+    var perspMatrix;
+    var viewMatrix;
+    var tempMatrix;
+
+    var mx = window.innerWidth/2;
+    var my = window.innerHeight/2;
+    var mDown = false;
+
+    var tex_program;
+
+    var canvas;
+ 
+    function init_gl(canvas) {
+        try {
+            gl = canvas.getContext("webgl");
+            if (!gl)
+                gl = canvas.getContext("experimental-webgl");
+            if (gl) {
+                
+                ensure_fullscreen();
+                gl.enable(gl.DEPTH_TEST);
+                gl.depthFunc(gl.LEQUAL); 
+            }
+        } catch (e) {
+        }
+
+        if (!gl) {
+            alert("Could not initialise WebGL, sorry :-(");
+        }
+    }
+ 
+    function getShader(gl, id) {
+        var script = document.getElementById(id);
+        if (!script) {
+            return null;
+        }
+ 
+        var shader;
+        if (script.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } else if (script.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } else {
+            return null;
+        }
+ 
+        gl.shaderSource(shader, script.text);
+        gl.compileShader(shader);
+ 
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+ 
+        return shader;
+    }
+
+    function loadTexture(url) {
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+
+        const level = 0;
+        const internalFormat = gl.RGBA;
+        const width = 1;
+        const height = 1;
+        const border = 0;
+        const srcFormat = gl.RGBA;
+        const srcType = gl.UNSIGNED_BYTE;
+        const pixel = new Uint8Array([0, 0, 255, 255]);
+        gl.texImage2D(gl.TEXTURE_2D, level, internalFormat,
+                        width, height, border, srcFormat, srcType,
+                        pixel);
+
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = function() {
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.texImage2D(gl.TEXTURE_2D, level, internalFormat,
+                        srcFormat, srcType, image);
+
+            if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
+            gl.generateMipmap(gl.TEXTURE_2D);
+            } else {
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            }
+        };
+        image.src = url;
+
+        return texture;
+    }
+
+    function isPowerOf2(value) {
+        return (value & (value - 1)) == 0;
+    }
+
+    function getRelMousePos(mousePos, screenWidth, screenHeight)
+    {
+        return [mousePos[0] / screenWidth - .5, mousePos[1] / screenHeight - .5];
+    }
+
+    function drawCube(p)
+    {
+        gl.useProgram(p)
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, cubeTexture);
+        gl.uniform1i(tex_program.r_texture_sampler, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, cubeVB);
+        gl.vertexAttribPointer(p.r_vertex, 3, gl.FLOAT, false, 3 * Float32Array.BYTES_PER_ELEMENT, 0);
+        gl.enableVertexAttribArray(p.r_vertex);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, cubeUVB);
+        gl.vertexAttribPointer(p.r_uv, 2, gl.FLOAT, false, 2 * Float32Array.BYTES_PER_ELEMENT, 0);
+        gl.enableVertexAttribArray(p.r_uv);
+
+        let rmp = getRelMousePos([mx, my], canvas.width, canvas.height);
+        viewMatrix.lookAt([0,0,1], [rmp[1], rmp[0], 0], [0, 1, 0]);
+        tempMatrix.setRotationZ(-Math.PI/2);
+        viewMatrix.mult(tempMatrix);
+        
+        if (cubeXTheta > (4*2*Math.PI))
+        {
+            cubeXTheta = 0;
+        }
+        else
+        {
+            cubeXTheta += 0.01
+        }
+
+        gl.uniformMatrix4fv(p.r_persp_mat, false, perspMatrix);
+        gl.uniformMatrix4fv(p.r_view_mat, false, viewMatrix);
+
+        gl.drawArrays(gl.TRIANGLES, 0, 12*3);
+    }
+ 
+    function draw_scene() {
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        drawCube(tex_program);
+    }
+
+    function ensure_fullscreen()
+    {
+        if ((canvas.width != window.innerWidth) || (canvas.height != window.innerHeight))
+        {
+            canvas.width  = window.innerWidth;
+            canvas.height = window.innerHeight;
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            perspMatrix.perspective(1.745329, canvas.width/canvas.height, 0.1, 500.0);
+        }
+    }
+
+    function mainLoop()
+    {
+        draw_scene();
+        ensure_fullscreen();
+        frameID = requestAnimationFrame(mainLoop);
+    }
+
+    function init_stuff()
+    {
+        
+        var texVS = getShader(gl, "tex-vs");
+        var texFS = getShader(gl, "tex-fs");
+ 
+        tex_program = gl.createProgram();
+
+        gl.attachShader(tex_program, texVS);
+        gl.attachShader(tex_program, texFS);
+        gl.linkProgram(tex_program);
+
+        if (!gl.getProgramParameter(tex_program, gl.LINK_STATUS))
+        {
+            alert("LOL TEXTURE SHADER BORKE XDDDD!! :)");
+        }
+        
+        gl.useProgram(tex_program);
+        tex_program.r_vertex = gl.getAttribLocation(tex_program, "vertex");
+        tex_program.r_uv     = gl.getAttribLocation(tex_program, "inUV");
+        tex_program.r_persp_mat       = gl.getUniformLocation(tex_program, "projectionMatrix");
+        tex_program.r_view_mat        = gl.getUniformLocation(tex_program, "viewMatrix");
+        tex_program.r_texture_sampler = gl.getUniformLocation(tex_program, "myTextureSampler");
+
+        gl.useProgram(tex_program);
+
+        cubeVB  = gl.createBuffer();
+        cubeUVB = gl.createBuffer();
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, cubeVB);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cubeVertices), gl.STATIC_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, cubeUVB);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cubeUVs), gl.STATIC_DRAW);
+
+        cubeTexture = loadTexture("https://raw.githubusercontent.com/recidivism5/surnd/master/rndSquare.png");
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, cubeTexture);
+        gl.uniform1i(tex_program.r_texture_sampler, 0); 
+    }
+
+    class Mat4 extends Float32Array
+    {
+        constructor()
+        {
+            super(16);
+            this.setIdentity();
+        }
+        setIdentity()
+        {
+            this.fill(0);
+            this[0]  = 1;
+            this[5]  = 1;
+            this[10] = 1;
+            this[15] = 1;
+        }
+        perspective(fov_radians, aspect_ratio, near, far)
+        {
+            let S = 1.0/Math.tan(fov_radians/2);
+            let d = near - far;
+            
+            this[0] = S/aspect_ratio;
+            this[5] = S;
+            this[10] = (far+near)/d;
+            this[11] = -1.0;
+            this[14] = (2*far*near)/d;
+            this[15] = 0.0;
+        }
+        translate(v)
+        {
+            this[12] += v[0];
+            this[13] += v[1];
+            this[14] += v[2];
+        }
+        setPos(v)
+        {
+            this[12] = v[0];
+            this[13] = v[1];
+            this[14] = v[2];
+        }
+        setRotationX(theta)
+        {
+            let c = Math.cos(theta);
+            let s = Math.sin(theta);
+            this[0] = 1;
+            this[1] = 0;
+            this[2] = 0;
+            this[4] = 0;
+            this[5] = c;
+            this[6] = s;
+            this[8] = 0;
+            this[9] = -s;
+            this[10] = c;
+        }
+        setRotationY(theta)
+        {
+            let c = Math.cos(theta);
+            let s = Math.sin(theta);
+            this[0]  = c;
+            this[1]  = 0;
+            this[2]  = -s;
+            this[4]  = 0;
+            this[5]  = 1;
+            this[6]  = 0;
+            this[8]  = s;
+            this[9]  = 0;
+            this[10] = c;
+        }
+        setRotationZ(theta)
+        {
+            let c = Math.cos(theta);
+            let s = Math.sin(theta);
+            this[0]  = c;
+            this[1]  = s;
+            this[2]  = 0;
+            this[4]  = -s;
+            this[5]  = c;
+            this[6]  = 0;
+            this[8]  = 0;
+            this[9]  = 0;
+            this[10] = 1;
+        }
+        mult(b)
+        {
+            let output = new Mat4();
+            let f, m;
+            for (let i = 0; i < 16; i++)
+            {
+                f = 4 * Math.floor(i/4);
+                m = i%4;
+                output[i] = this[f] * b[m] + this[f+1] * b[m+4] + this[f+2] * b[m+8] + this[f+3] * b[m+12];
+            }
+            for (let i = 0; i < 16; i++)
+            {
+                this[i] = output[i];
+            }
+        }
+        lookAt(cam_pos, center, up)
+        {
+            function cross_product(vec1, vec2, output)
+            {
+                output[0] = vec1[1] * vec2[2] - vec1[2] * vec2[1];
+                output[1] = vec1[2] * vec2[0] - vec1[0] * vec2[2];
+                output[2] = vec1[0] * vec2[1] - vec1[1] * vec2[0];
+            }
+
+            let F = [];
+            F[0] = center[0] - cam_pos[0];
+            F[1] = center[1] - cam_pos[1];
+            F[2] = center[2] - cam_pos[2];
+
+            let F_magnitude = Math.sqrt(F[0]*F[0] + F[1]*F[1] + F[2]*F[2]);
+            F[0] = F[0] / F_magnitude;
+            F[1] = F[1] / F_magnitude;
+            F[2] = F[2] / F_magnitude;
+
+            let s = [];
+            let s_normalized = [];
+            let u = [];
+
+            cross_product(F, up, s);
+            let s_magnitude = Math.sqrt(s[0]*s[0] + s[1]*s[1] + s[2]*s[2]);
+            s_normalized[0] = s[0] / s_magnitude;
+            s_normalized[1] = s[1] / s_magnitude;
+            s_normalized[2] = s[2] / s_magnitude;
+
+            cross_product(s_normalized, F, u);
+            let u_magnitude = Math.sqrt(u[0]*u[0] + u[1]*u[1] + u[2]*u[2]);
+
+            F[0] = -F[0];
+            F[1] = -F[1];
+            F[2] = -F[2];
+
+            this.setIdentity();
+            this[0] = s_normalized[0];
+            this[4] = s_normalized[1];
+            this[8] = s_normalized[2];
+            this[1]  =  u[0];
+            this[5]  =  u[1];
+            this[9]  =  u[2];
+            this[2]  =  F[0];
+            this[6]  =  F[1];
+            this[10] =  F[2];
+
+            this[12] = -cam_pos[0];
+            this[13] = -cam_pos[1];
+            this[14] = -cam_pos[2];
+        }
+    }
+
+    function init_matrices()
+    {
+        perspMatrix = new Mat4();
+        viewMatrix  = new Mat4();
+        tempMatrix  = new Mat4();
+    }
+ 
+    function webGLStart() {
+        canvas = document.getElementById("CUBE");
+
+        init_matrices();
+        
+        init_gl(canvas);
+
+        init_stuff();
+ 
+        //gl.clearColor(0.039, 0.043, 0.039, 1.0);
+        gl.clearColor(0.039, 0.043, 0.139, 1.0);
+
+        canvas.addEventListener("mousemove", e => {
+            mx = e.offsetX;
+            my = e.offsetY;
+        });
+
+        mainLoop();
+    }
+ 
+</script> 
+ 
+<body onload="webGLStart();"> 
+    <canvas id="CUBE" style="border: none;"></canvas> 
+</body> 
+ 
+</html>
